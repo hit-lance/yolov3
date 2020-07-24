@@ -64,7 +64,7 @@ def train(hyp):
     imgsz_min, imgsz_max, imgsz_test = opt.img_size  # img sizes (min, max, test)
 
     # Image Sizes
-    gs = 32  # (pixels) grid size
+    gs = 64  # (pixels) grid size
     assert math.fmod(imgsz_min, gs) == 0, '--img-size %g must be a %g-multiple' % (imgsz_min, gs)
     opt.multi_scale |= imgsz_min != imgsz_max  # multi if different (min, max)
     if opt.multi_scale:
@@ -116,48 +116,33 @@ def train(hyp):
     attempt_download(weights)
     if weights.endswith('.pt'):  # pytorch format
         # possible weights are '*.pt', 'yolov3-spp.pt', 'yolov3-tiny.pt' etc.
-        ckpt = torch.load(weights, map_location=device)
+        chkpt = torch.load(weights, map_location=device)
 
         # load model
         try:
-            ckpt['model'] = {k: v for k, v in ckpt['model'].items() if model.state_dict()[k].numel() == v.numel()}
-            model.load_state_dict(ckpt['model'], strict=False)
+            chkpt['model'] = {k: v for k, v in chkpt['model'].items() if model.state_dict()[k].numel() == v.numel()}
+            model.load_state_dict(chkpt['model'], strict=False)
         except KeyError as e:
             s = "%s is not compatible with %s. Specify --weights '' or specify a --cfg compatible with %s. " \
                 "See https://github.com/ultralytics/yolov3/issues/657" % (opt.weights, opt.cfg, opt.weights)
             raise KeyError(s) from e
 
         # load optimizer
-        if ckpt['optimizer'] is not None:
-            optimizer.load_state_dict(ckpt['optimizer'])
-            best_fitness = ckpt['best_fitness']
+        if chkpt['optimizer'] is not None:
+            optimizer.load_state_dict(chkpt['optimizer'])
+            best_fitness = chkpt['best_fitness']
 
         # load results
-        if ckpt.get('training_results') is not None:
+        if chkpt.get('training_results') is not None:
             with open(results_file, 'w') as file:
-                file.write(ckpt['training_results'])  # write results.txt
+                file.write(chkpt['training_results'])  # write results.txt
 
-        # epochs
-        start_epoch = ckpt['epoch'] + 1
-        if epochs < start_epoch:
-            print('%s has been trained for %g epochs. Fine-tuning for %g additional epochs.' %
-                  (opt.weights, ckpt['epoch'], epochs))
-            epochs += ckpt['epoch']  # finetune additional epochs
-
-        del ckpt
+        start_epoch = chkpt['epoch'] + 1
+        del chkpt
 
     elif len(weights) > 0:  # darknet format
         # possible weights are '*.weights', 'yolov3-tiny.conv.15',  'darknet53.conv.74' etc.
         load_darknet_weights(model, weights)
-    
-    if opt.freeze_layers:                                                                                                                                                            
-        output_layer_indices = [idx - 1 for idx, module in enumerate(model.module_list) if isinstance(module, YOLOLayer)]                                                                                                                      
-        freeze_layer_indices = [x for x in range(len(model.module_list)) if                                                                                                         
-                                (x not in output_layer_indices) and                                                                                                               
-                                (x - 1 not in output_layer_indices)]                                                                                                                 
-        for idx in freeze_layer_indices:                                                                                                                                             
-            for parameter in model.module_list[idx].parameters():                                                                                                                    
-                parameter.requires_grad_(False)                                                                                                                                      
 
     # Mixed precision training https://github.com/NVIDIA/apex
     if mixed_precision:
@@ -199,7 +184,8 @@ def train(hyp):
 
     # Dataloader
     batch_size = min(batch_size, len(dataset))
-    nw = 0  # number of workers
+    # nw = min([os.cpu_count(), batch_size if batch_size > 1 else 0, 8])  # number of workers
+    nw = 0
     dataloader = torch.utils.data.DataLoader(dataset,
                                              batch_size=batch_size,
                                              num_workers=nw,
@@ -355,17 +341,17 @@ def train(hyp):
         save = (not opt.nosave) or (final_epoch and not opt.evolve)
         if save:
             with open(results_file, 'r') as f:  # create checkpoint
-                ckpt = {'epoch': epoch,
+                chkpt = {'epoch': epoch,
                          'best_fitness': best_fitness,
                          'training_results': f.read(),
                          'model': ema.ema.module.state_dict() if hasattr(model, 'module') else ema.ema.state_dict(),
                          'optimizer': None if final_epoch else optimizer.state_dict()}
 
             # Save last, best and delete
-            torch.save(ckpt, last)
+            torch.save(chkpt, last)
             if (best_fitness == fi) and not final_epoch:
-                torch.save(ckpt, best)
-            del ckpt
+                torch.save(chkpt, best)
+            del chkpt
 
         # end epoch ----------------------------------------------------------------------------------------------------
     # end training
@@ -409,12 +395,11 @@ if __name__ == '__main__':
     parser.add_argument('--device', default='', help='device id (i.e. 0 or 0,1 or cpu)')
     parser.add_argument('--adam', action='store_true', help='use adam optimizer')
     parser.add_argument('--single-cls', action='store_true', help='train as single-class dataset')
-    parser.add_argument('--freeze-layers', action='store_true', help='Freeze non-output layers')  
     opt = parser.parse_args()
-    opt.weights = last if opt.resume and not opt.weights else opt.weights
+    opt.weights = last if opt.resume else opt.weights
     check_git_status()
-    opt.cfg = check_file(opt.cfg)  # check file
-    opt.data = check_file(opt.data)  # check file
+    opt.cfg = list(glob.iglob('./**/' + opt.cfg, recursive=True))[0]  # find file
+    # opt.data = list(glob.iglob('./**/' + opt.data, recursive=True))[0]  # find file
     print(opt)
     opt.img_size.extend([opt.img_size[-1]] * (3 - len(opt.img_size)))  # extend to 3 sizes (min, max, test)
     device = torch_utils.select_device(opt.device, apex=mixed_precision, batch_size=opt.batch_size)
