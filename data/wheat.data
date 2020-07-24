@@ -1,0 +1,4 @@
+classes=1
+train=data/wheat_train.txt
+valid=data/wheat_val.txt
+names=data/wheat.names
